@@ -1,5 +1,5 @@
 ## AI disclosure
-The agent selects village tasks for 30-45 game ticks and returns home at night.
+The agent selects village tasks for 30-45 game ticks and returns home at night. LLM should be functional now
 
 # Days at Three Branches agent
 
