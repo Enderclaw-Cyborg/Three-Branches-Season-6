@@ -1,5 +1,5 @@
 ## AI disclosure
-Similar with Crane Reach, restructured the agent.py to do random tasks for longer periods of time rather than doing it for a split second. return to their homes at night.
+The agent selects village tasks for 30-45 game ticks and returns home at night.
 
 # Days at Three Branches agent
 
@@ -29,7 +29,7 @@ python -m sandbox eval   # run repeatable automated days
 
 The starter shows `action.walk`, `action.stand`, an emote, and `use`. Read [`environment.md`](environment.md) before changing it. Begin with one behavior that you can recognize in `watch`, then make it more responsive to the people and props it sees.
 
-Chat is optional. If you add `chat(self, inbox)` to your agent, send and receive raw message dictionaries that use canonical player IDs such as `"player_0"` and `"player_1"`. For example, return `[{"to": "player_0", "text": "Hello."}]` to send a direct message. The village helpers do not include a chat namespace. Read [`environment.md`](environment.md#chat-with-other-agents) for the inbox format, broadcasts, and delivery timing.
+The agent answers visitor messages with the season-enabled LLM. Start `python -m sandbox play` to play the visitor and chat with villagers; `watch` runs the scripted visitor instead. Replies are asynchronous, so villagers keep their routine while the LLM responds. Read [`environment.md`](environment.md#chat-with-other-agents) for the inbox format, broadcasts, and delivery timing.
 
 In `watch` and `eval`, your `Agent` controls the whole cast, and `scripted_visitor` controls the visitor. The `naive` built-in is the simple baseline for the cast. When you are ready to submit, follow the [submitting guide](https://vox-deorum.github.io/game-sandbox/students/submitting/).
 

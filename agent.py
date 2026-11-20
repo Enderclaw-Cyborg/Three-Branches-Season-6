@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import heapq
+from collections import deque
 from collections.abc import Mapping
 
+from sandbox.llm import BackgroundLLM
 from sandbox.observation_types import ThreeBranchesAction, ThreeBranchesObservation
 from sandbox.village import action, day, geometry, layout, me, people, props
 
+_CHAT_MESSAGE_LIMIT = 200
+_CHAT_HISTORY_LIMIT = 8
 _TASK_STATES = {
     "stall": "closed",
     "bench": "empty",
@@ -28,6 +32,12 @@ class Agent:
 
     def reset(self, seed: int, observation: ThreeBranchesObservation) -> None:
         self._rng = me.rng(observation, seed)
+        self._llm = BackgroundLLM()
+        self._chat_identity = f"{me.player_id(observation)} from {me.home(observation)}"
+        self._chat_history: dict[str, list[dict[str, str]]] = {}
+        self._chat_queue: deque[tuple[str, str]] = deque()
+        self._chat_sender: str | None = None
+        self._chat_user_text: str | None = None
         self._task: Mapping[str, object] | None = None
         self._task_started = False
         self._task_remaining = 0
@@ -40,6 +50,75 @@ class Agent:
         self._route_target: tuple[int, int] | None = None
         self._route: list[tuple[int, int]] = []
         self._route_index = 0
+
+    def chat(self, inbox: list[dict[str, object]]) -> list[dict[str, str]]:
+        """Reply to visitor messages without blocking the villager's actions."""
+        outgoing: list[dict[str, str]] = []
+        reply = self._llm.response()
+        if reply is not None:
+            sender = self._chat_sender
+            if sender is not None:
+                text = reply.strip()[:_CHAT_MESSAGE_LIMIT]
+                if text:
+                    self._chat_history[sender].append(
+                        {"role": "assistant", "content": text}
+                    )
+                    self._trim_chat_history(sender)
+                    outgoing.append({"to": sender, "text": text})
+            self._chat_sender = None
+            self._chat_user_text = None
+        elif self._chat_sender is not None and not self._llm.requesting:
+            sender = self._chat_sender
+            history = self._chat_history[sender]
+            if history and history[-1] == {
+                "role": "user",
+                "content": self._chat_user_text,
+            }:
+                history.pop()
+            self._chat_sender = None
+            self._chat_user_text = None
+
+        for message in inbox:
+            sender = message.get("from")
+            text = message.get("text")
+            if (
+                isinstance(sender, str)
+                and sender == "player_0"
+                and isinstance(text, str)
+                and text.strip()
+            ):
+                self._chat_queue.append((sender, text.strip()))
+
+        if self._chat_sender is None and self._chat_queue:
+            sender, text = self._chat_queue[0]
+            history = self._chat_history.get(sender, [])
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a villager in Days at Three Branches, known as "
+                        f"{self._chat_identity}. Speak warmly and naturally. Answer the "
+                        "visitor's message in one concise in-character reply, under 180 "
+                        "characters. Do not claim to know events you were not told about."
+                    ),
+                },
+                *history[-_CHAT_HISTORY_LIMIT:],
+                {"role": "user", "content": text},
+            ]
+            if self._llm.request(model="small", messages=messages, max_tokens=100):
+                self._chat_queue.popleft()
+                self._chat_sender = sender
+                self._chat_user_text = text
+                self._chat_history.setdefault(sender, []).append(
+                    {"role": "user", "content": text}
+                )
+                self._trim_chat_history(sender)
+
+        return outgoing
+
+    def _trim_chat_history(self, sender: str) -> None:
+        history = self._chat_history[sender]
+        del history[:-_CHAT_HISTORY_LIMIT]
 
     def act(self, observation: ThreeBranchesObservation) -> ThreeBranchesAction:
         heading = me.heading(observation)
@@ -63,14 +142,18 @@ class Agent:
             self._task_started = False
             self._toggle_used = False
             if self._task is not None:
-                self._task_remaining = self._rng.randint(10, 15)
+                self._task_remaining = self._rng.randint(30, 45)
                 self._wander_remaining = 0
                 self._sweeping = False
 
         if self._task is None:
             return self._fallback_action(heading, wave)
 
-        target = layout.cell_center(observation, self._task["cell"])
+        task_cell = self._task["cell"]
+        if not isinstance(task_cell, Mapping):
+            self._task = None
+            return self._fallback_action(heading, wave)
+        target = layout.cell_center(observation, task_cell)
         destination = layout.nearest_walkable(observation, target)
         if destination is None:
             self._task = None
@@ -111,7 +194,10 @@ class Agent:
             state = props.state(observation, str(prop["id"]))
             if state is not None and state != expected_state:
                 continue
-            target = layout.cell_center(observation, prop["cell"])
+            cell = prop["cell"]
+            if not isinstance(cell, Mapping):
+                continue
+            target = layout.cell_center(observation, cell)
             if layout.nearest_walkable(observation, target) is not None:
                 available.append(prop)
         return self._rng.choice(available) if available else None
